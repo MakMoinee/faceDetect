@@ -6,10 +6,13 @@ import base64
 import numpy as np
 import cv2
 
-import pathlib
-temp = pathlib.PosixPath
-pathlib.PosixPath = pathlib.WindowsPath
+from flask_cors import CORS
+
+# import pathlib
+# temp = pathlib.PosixPath
+# pathlib.PosixPath = pathlib.WindowsPath
 app = Flask(__name__)
+CORS(app)
 
 # Load YOLOv5 model - change path to your weights
 model = torch.hub.load('ultralytics/yolov5', 'custom', path='yolov5s.pt', force_reload=False)
