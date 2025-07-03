@@ -1,0 +1,12 @@
+# created by virtualenv automatically
+
+custom_yolov5_training_project
+dataset
+Lib
+Scripts
+share
+*.yaml
+*.json
+*.cfg
+tree.txt
+*.TAG
