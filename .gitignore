@@ -10,3 +10,7 @@ share
 *.cfg
 tree.txt
 *.TAG
+
+bin
+lib
+*.log
