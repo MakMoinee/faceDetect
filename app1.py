@@ -25,7 +25,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Define base directory for cleaner absolute path management
-BASE_DIR = "D:\\work\\faceDetect\\faceDetect"
+BASE_DIR = "D:\\work\\faceDetect"
 
 # Define dataset paths
 DATASET_ROOT = os.path.join(BASE_DIR, 'dataset')
