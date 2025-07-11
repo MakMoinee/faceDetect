@@ -127,7 +127,7 @@ def load_detection_model(model_to_load_path=None):
             current_loaded_model_type = 'custom_specified' # Should not happen often
         print(f"Loading specified model: {final_model_path}")
 
-    inference_model = torch.hub.load('ultralytics/yolov5', 'custom', path=final_model_path, force_reload=True, weights_only=False)
+    inference_model = torch.hub.load('ultralytics/yolov5', 'custom', path=final_model_path, force_reload=True)
     
     # Set confidence threshold based on model type
     if current_loaded_model_type == 'default':
@@ -140,7 +140,7 @@ def load_detection_model(model_to_load_path=None):
     try:
         # Load without autoshape for compatibility if using model.train() directly,
         # but subprocess handles the training in this setup.
-        training_model = torch.hub.load('ultralytics/yolov5', 'custom', path=final_model_path, autoshape=False, force_reload=True, weights_only=False)
+        training_model = torch.hub.load('ultralytics/yolov5', 'custom', path=final_model_path, autoshape=False, force_reload=True)
     except TypeError as e:
         print(f"Warning: Could not load training model with autoshape=False directly: {e}")
         print("Falling back to using inference model for 'training_model' placeholder.")
