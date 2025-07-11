@@ -803,12 +803,12 @@ def train_model():
 
             load_detection_model(TRAINED_MODEL_FULL_PATH)
             
-            pathlib.PosixPath = temp 
+            pathlib.PosixPath = BASE_DIR
             
             return jsonify({"success": True, "message": "Model training completed successfully.", "model_path": TRAINED_MODEL_FULL_PATH})
         else:
             print("Subprocess training error:\\n", process.stderr)
-            pathlib.PosixPath = temp
+            pathlib.PosixPath = BASE_DIR
             return jsonify({"success": False, "error": f"Subprocess training failed: {process.stderr}"}), 500
 
     except Exception as e:
