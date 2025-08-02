@@ -12,6 +12,7 @@ import yaml
 import json
 import subprocess
 import time
+import sys
 import random
 
 from flask_cors import CORS
@@ -726,6 +727,16 @@ def capture_data():
 def get_registered_faces():
     """Returns the current mapping of registered face names to their class IDs."""
     return jsonify({"success": True, "class_name_to_id": class_name_to_id})
+
+@app.route('/restart', methods=['GET'])
+def restart_server():
+    try:
+        print("Restarting server...")
+        # Flush stdout to make sure all prints appear before exit
+        sys.stdout.flush()
+        os.execv(sys.executable, ['python3'] + sys.argv)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/train_model', methods=['POST'])
