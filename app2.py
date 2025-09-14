@@ -751,80 +751,45 @@ def train_model():
     try:
         update_data_yaml()
 
-        epochs = 35 # Increased epochs slightly, 10 was too low for a good model.
+        epochs = 35  # number of training epochs
         img_size = 640
-        batch_size = 2 # Keep batch_size small if you have few images or limited VRAM
-        weights_path = 'yolov5s.pt' # Start from pre-trained YOLOv5s weights
+        batch_size = 2  # adjust depending on GPU VRAM
+        weights_path = DEFAULT_YOLOV5_MODEL  # start from yolov5s.pt
 
-        project_arg_name = YOLOV5_PROJECT_ARG_NAME
-        run_arg_name = YOLOV5_RUN_ARG_NAME
+        # Ensure runs directory exists
+        os.makedirs(YOLOV5_RUNS_ROOT_DIR, exist_ok=True)
 
-        # Define the full path to the specific run directory
-        run_output_dir = os.path.join(YOLOV5_RUNS_ROOT_DIR, project_arg_name, run_arg_name)
-
-        # --- FIX: Delete the old run folder before starting new training ---
-        if os.path.exists(run_output_dir):
-            print(f"Deleting old training run directory: {run_output_dir}")
-            try:
-                shutil.rmtree(run_output_dir)
-                print("Old run directory deleted successfully.")
-            except OSError as e:
-                print(f"Error deleting old run directory {run_output_dir}: {e}")
-                return jsonify({"success": False, "error": f"Failed to clean up old training data: {e}"}), 500
-        # --- End Fix ---
-
-        yolov5_repo_dir = os.path.join(BASE_DIR, 'yolov5')
-        train_script_path = os.path.join(yolov5_repo_dir, 'train.py')
-
-        if not os.path.exists(train_script_path):
-            return jsonify({"success": False, "error": f"train.py not found at {train_script_path}. Please ensure the ultralytics/yolov5 repository is cloned into your project directory."}), 500
-
-        command = [
-            'python',
-            train_script_path,
-            '--data', DATA_YAML_PATH,
-            '--epochs', str(epochs),
-            '--img', str(img_size),
-            '--batch-size', str(batch_size),
-            '--weights', weights_path,
-            '--project', project_arg_name,
-            '--name', run_arg_name
+        # Training command
+        cmd = [
+            "python3", "train.py",
+            "--img", str(img_size),
+            "--batch", str(batch_size),
+            "--epochs", str(epochs),
+            "--data", DATA_YAML_PATH,
+            "--weights", weights_path,
+            "--project", YOLOV5_PROJECT_ARG_NAME,
+            "--name", YOLOV5_RUN_ARG_NAME,
+            "--exist-ok",  # overwrite if same run exists
+            "--save-period", "1"  # save checkpoint every epoch
         ]
 
-        if len(class_name_to_id) == 1:
-            command.append('--single-cls')
-        
-        print(f"Executing training command: {' '.join(command)}")
+        print("Starting training with command:", " ".join(cmd))
+        process = subprocess.run(cmd, cwd=os.path.join(BASE_DIR, "yolov5"), capture_output=True, text=True)
 
-        # --- MODIFICATION START ---
-        process = subprocess.run(command, capture_output=True, text=True, cwd=BASE_DIR, encoding='utf-8', errors='replace')
-        # --- MODIFICATION END ---
+        if process.returncode != 0:
+            print("Training failed:", process.stderr)
+            return jsonify({"success": False, "error": process.stderr}), 500
 
-        if process.returncode == 0:
-            print("Subprocess training output:\\n", process.stdout)
+        print("Training completed successfully.")
+        # Reload the trained model after training
+        load_detection_model(TRAINED_MODEL_FULL_PATH)
 
-            time.sleep(2) # Increased sleep slightly for more robustness. Adjust if needed.
-
-            # Re-check the path for the trained model after training
-            # This path is now correctly defined at the top as CURRENT_RUN_DIR
-            if not os.path.exists(TRAINED_MODEL_FULL_PATH):
-                print(f"ERROR: Trained model file not found at expected path: {TRAINED_MODEL_FULL_PATH}")
-                load_detection_model(DEFAULT_YOLOV5_MODEL)
-                return jsonify({"success": False, "error": f"Trained model file not found after training, path: {TRAINED_MODEL_FULL_PATH}. Please check YOLOv5 output. Using default model for detection."}), 500
-
-            load_detection_model(TRAINED_MODEL_FULL_PATH)
-            
-            pathlib.PosixPath = BASE_DIR
-            
-            return jsonify({"success": True, "message": "Model training completed successfully.", "model_path": TRAINED_MODEL_FULL_PATH})
-        else:
-            print("Subprocess training error:\\n", process.stderr)
-            pathlib.PosixPath = BASE_DIR
-            return jsonify({"success": False, "error": f"Subprocess training failed: {process.stderr}"}), 500
+        return jsonify({"success": True, "model_path": TRAINED_MODEL_FULL_PATH})
 
     except Exception as e:
-        print(f"An unexpected error occurred during model training setup: {e}")
+        print(f"Error in /train_model: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 # --- Main Execution ---
 if __name__ == '__main__':
