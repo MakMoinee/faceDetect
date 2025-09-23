@@ -651,6 +651,7 @@ def capture_data():
     """
     Receives an image and initial detections, assigns a class ID based on provided name,
     saves the image, and creates a YOLOv5-formatted label file.
+    If the image is landscape, it rotates to portrait (90° CCW).
     Distributes images into train/val folders.
     """
     global image_count
@@ -673,11 +674,22 @@ def capture_data():
             save_class_mapping()
             print(f"Registered new face: '{person_name}' with ID {class_name_to_id[person_name]}")
 
-
         person_class_id = class_name_to_id[person_name]
 
+        # Decode image
         img_bytes = base64.b64decode(img_b64)
         img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+
+        rotated = False
+        orig_w, orig_h = img_pil.size
+
+        # --- Rotate if landscape (width > height) ---
+        if orig_w > orig_h:
+            img_pil = img_pil.rotate(90, expand=True)
+            rotated = True
+            print(f"Rotated image from {orig_w}x{orig_h} to portrait {img_pil.size}")
+
+        new_w, new_h = img_pil.size
 
         image_count += 1
         img_filename = f"image_{image_count:05d}.jpg"
@@ -698,26 +710,43 @@ def capture_data():
         img_path = os.path.join(target_image_dir, img_filename)
         label_path = os.path.join(target_label_dir, label_filename)
 
+        # Save the rotated (if applied) image
         img_pil.save(img_path)
 
+        # --- Adjust bounding boxes if rotated ---
         with open(label_path, 'w') as f:
-            img_width, img_height = img_pil.size
             for det in detections:
                 xmin = max(0, det['xmin'])
                 ymin = max(0, det['ymin'])
-                xmax = min(img_width, det['xmax'])
-                ymax = min(img_height, det['ymax'])
+                xmax = min(orig_w, det['xmax'])
+                ymax = min(orig_h, det['ymax'])
 
-                center_x = ((xmin + xmax) / 2) / img_width
-                center_y = ((ymin + ymax) / 2) / img_height
-                width = (xmax - xmin) / img_width
-                height = (ymax - ymin) / img_height
+                if rotated:
+                    # For 90° CCW rotation:
+                    # NewX = Y, NewY = (orig_w - X)
+                    new_xmin = ymin
+                    new_xmax = ymax
+                    new_ymin = orig_w - xmax
+                    new_ymax = orig_w - xmin
+
+                    xmin, xmax, ymin, ymax = new_xmin, new_xmax, new_ymin, new_ymax
+
+                    # Swap back to make sure min/max ordering holds
+                    xmin, xmax = sorted([xmin, xmax])
+                    ymin, ymax = sorted([ymin, ymax])
+
+                # Normalize relative to new width/height
+                center_x = ((xmin + xmax) / 2) / new_w
+                center_y = ((ymin + ymax) / 2) / new_h
+                width = (xmax - xmin) / new_w
+                height = (ymax - ymin) / new_h
 
                 f.write(f"{person_class_id} {center_x} {center_y} {width} {height}\n")
 
         save_class_mapping()
-        print(f"Captured {img_filename} for {person_name} (ID: {person_class_id}) into {folder_type} set.")
-        return jsonify({"success": True, "filename": img_filename, "folder": folder_type})
+        print(f"Captured {img_filename} for {person_name} (ID: {person_class_id}) into {folder_type} set. Rotated: {rotated}")
+        return jsonify({"success": True, "filename": img_filename, "folder": folder_type, "rotated": rotated})
+
     except Exception as e:
         print(f"Error capturing data: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
