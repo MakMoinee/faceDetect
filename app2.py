@@ -769,7 +769,7 @@ def train_model():
     try:
         update_data_yaml()
 
-        epochs = 35 # Increased epochs slightly, 10 was too low for a good model.
+        epochs = 100 # Increased epochs slightly, 10 was too low for a good model.
         img_size = 640
         batch_size = 2 # Keep batch_size small if you have few images or limited VRAM
         weights_path = 'yolov5s.pt' # Start from pre-trained YOLOv5s weights
