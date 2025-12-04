@@ -69,6 +69,8 @@ class_name_to_id = {}
 next_class_id = 0
 image_count = 0
 finished_class_ids = set()  # Track class IDs that are marked as finished
+deleted_class_ids = set()  # Track deleted class IDs that can be reused
+deleted_name_to_id = {}  # Track which name had which ID when deleted (for re-registration)
 
 # --- Helper Functions ---
 
@@ -79,7 +81,9 @@ def save_class_mapping():
             'class_name_to_id': class_name_to_id,
             'next_class_id': next_class_id,
             'image_count': image_count,
-            'finished_class_ids': list(finished_class_ids)  # Convert set to list for JSON serialization
+            'finished_class_ids': list(finished_class_ids),  # Convert set to list for JSON serialization
+            'deleted_class_ids': list(deleted_class_ids),  # Track deleted IDs for reuse
+            'deleted_name_to_id': deleted_name_to_id  # Track name->ID mapping for deleted classes
         }, f, indent=4)
 
 def update_data_yaml():
@@ -149,7 +153,7 @@ def load_detection_model(model_to_load_path=None):
 
 def initialize_app_data_and_models():
     """Initializes dataset directories, loads saved data, and loads the appropriate model."""
-    global class_name_to_id, next_class_id, image_count, finished_class_ids
+    global class_name_to_id, next_class_id, image_count, finished_class_ids, deleted_class_ids, deleted_name_to_id
 
     os.makedirs(IMAGES_TRAIN_DIR, exist_ok=True)
     os.makedirs(LABELS_TRAIN_DIR, exist_ok=True)
@@ -164,12 +168,16 @@ def initialize_app_data_and_models():
                 next_class_id = data.get('next_class_id', 0)
                 image_count = data.get('image_count', 0)
                 finished_class_ids = set(data.get('finished_class_ids', []))  # Load finished class IDs
+                deleted_class_ids = set(data.get('deleted_class_ids', []))  # Load deleted class IDs
+                deleted_name_to_id = data.get('deleted_name_to_id', {})  # Load deleted name->ID mapping
         except json.JSONDecodeError:
             print(f"Warning: {CLASS_MAPPING_FILE} is corrupted or empty. Starting with empty mapping.")
             class_name_to_id = {}
             next_class_id = 0
             image_count = 0
             finished_class_ids = set()
+            deleted_class_ids = set()
+            deleted_name_to_id = {}
     
     update_data_yaml()
     load_detection_model()
@@ -663,6 +671,8 @@ def capture_data():
     global next_class_id
     global class_name_to_id
     global finished_class_ids
+    global deleted_class_ids
+    global deleted_name_to_id
 
     try:
         # Check if finished=true query parameter is present
@@ -677,11 +687,28 @@ def capture_data():
             return jsonify({"success": False, "error": "Person name is required."}), 400
 
         if person_name not in class_name_to_id:
-            class_name_to_id[person_name] = next_class_id
-            next_class_id += 1
+            # Check if this name was previously deleted and reuse its old ID
+            if person_name in deleted_name_to_id:
+                old_id = deleted_name_to_id[person_name]
+                class_name_to_id[person_name] = old_id
+                deleted_class_ids.discard(old_id)  # Remove from deleted set since it's being reused
+                del deleted_name_to_id[person_name]  # Remove from deleted mapping
+                print(f"Re-registered previously deleted face: '{person_name}' with reused ID {old_id}")
+            else:
+                # Check if there are any deleted IDs available to reuse
+                if deleted_class_ids:
+                    reused_id = min(deleted_class_ids)  # Reuse the lowest available deleted ID
+                    class_name_to_id[person_name] = reused_id
+                    deleted_class_ids.discard(reused_id)
+                    print(f"Registered new face: '{person_name}' with reused deleted ID {reused_id}")
+                else:
+                    # No deleted IDs available, use next_class_id
+                    class_name_to_id[person_name] = next_class_id
+                    next_class_id += 1
+                    print(f"Registered new face: '{person_name}' with new ID {class_name_to_id[person_name]}")
+            
             update_data_yaml()
             save_class_mapping()
-            print(f"Registered new face: '{person_name}' with ID {class_name_to_id[person_name]}")
 
         person_class_id = class_name_to_id[person_name]
         
@@ -746,6 +773,118 @@ def capture_data():
 def get_registered_faces():
     """Returns the current mapping of registered face names to their class IDs."""
     return jsonify({"success": True, "class_name_to_id": class_name_to_id})
+
+@app.route('/delete_data', methods=['POST'])
+def delete_data():
+    """
+    Deletes a class ID and all associated images and labels.
+    Expects JSON body with 'id' field containing the class ID to delete.
+    """
+    global class_name_to_id
+    global finished_class_ids
+    global deleted_class_ids
+    global deleted_name_to_id
+    
+    try:
+        data = request.get_json()
+        class_id_to_delete = data.get('id')
+        
+        if class_id_to_delete is None:
+            return jsonify({"success": False, "error": "Class ID is required in request body."}), 400
+        
+        # Convert to int if it's a string
+        try:
+            class_id_to_delete = int(class_id_to_delete)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": f"Invalid class ID: {class_id_to_delete}. Must be an integer."}), 400
+        
+        # Find the class name associated with this ID
+        class_name_to_delete = None
+        for name, cid in class_name_to_id.items():
+            if cid == class_id_to_delete:
+                class_name_to_delete = name
+                break
+        
+        if class_name_to_delete is None:
+            return jsonify({"success": False, "error": f"Class ID {class_id_to_delete} not found."}), 404
+        
+        # Scan and delete associated images and labels
+        deleted_images = []
+        deleted_labels = []
+        
+        # Check both train and val directories
+        for image_dir, label_dir in [(IMAGES_TRAIN_DIR, LABELS_TRAIN_DIR), (IMAGES_VAL_DIR, LABELS_VAL_DIR)]:
+            if not os.path.exists(label_dir):
+                continue
+                
+            # Scan all label files
+            for label_filename in os.listdir(label_dir):
+                if not label_filename.endswith('.txt'):
+                    continue
+                
+                label_path = os.path.join(label_dir, label_filename)
+                
+                # Read the label file and check if it contains the class ID
+                try:
+                    with open(label_path, 'r') as f:
+                        lines = f.readlines()
+                        contains_class_id = False
+                        for line in lines:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split()
+                            if len(parts) >= 1:
+                                label_class_id = int(float(parts[0]))  # Handle float conversion
+                                if label_class_id == class_id_to_delete:
+                                    contains_class_id = True
+                                    break
+                        
+                        if contains_class_id:
+                            # Delete the label file
+                            os.remove(label_path)
+                            deleted_labels.append(label_filename)
+                            
+                            # Delete corresponding image file
+                            image_filename = label_filename.replace('.txt', '.jpg')
+                            image_path = os.path.join(image_dir, image_filename)
+                            if os.path.exists(image_path):
+                                os.remove(image_path)
+                                deleted_images.append(image_filename)
+                except Exception as e:
+                    print(f"Error processing label file {label_filename}: {e}")
+                    continue
+        
+        # Remove from class_name_to_id
+        del class_name_to_id[class_name_to_delete]
+        
+        # Remove from finished_class_ids if present
+        finished_class_ids.discard(class_id_to_delete)
+        
+        # Add to deleted sets for potential reuse
+        deleted_class_ids.add(class_id_to_delete)
+        deleted_name_to_id[class_name_to_delete] = class_id_to_delete  # Remember which name had this ID
+        
+        # Update data.yaml
+        update_data_yaml()
+        
+        # Save updated class mapping
+        save_class_mapping()
+        
+        print(f"Deleted class ID {class_id_to_delete} ({class_name_to_delete}). Removed {len(deleted_images)} images and {len(deleted_labels)} labels.")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Class ID {class_id_to_delete} ({class_name_to_delete}) deleted successfully.",
+            "deleted_images_count": len(deleted_images),
+            "deleted_labels_count": len(deleted_labels),
+            "deleted_images": deleted_images,
+            "deleted_labels": deleted_labels
+        })
+        
+    except Exception as e:
+        print(f"Error deleting data: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/train_model', methods=['POST'])
