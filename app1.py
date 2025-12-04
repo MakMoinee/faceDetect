@@ -68,6 +68,7 @@ current_loaded_model_type = 'unknown' # 'default' or 'trained'
 class_name_to_id = {}
 next_class_id = 0
 image_count = 0
+finished_class_ids = set()  # Track class IDs that are marked as finished
 
 # --- Helper Functions ---
 
@@ -77,7 +78,8 @@ def save_class_mapping():
         json.dump({
             'class_name_to_id': class_name_to_id,
             'next_class_id': next_class_id,
-            'image_count': image_count
+            'image_count': image_count,
+            'finished_class_ids': list(finished_class_ids)  # Convert set to list for JSON serialization
         }, f, indent=4)
 
 def update_data_yaml():
@@ -147,7 +149,7 @@ def load_detection_model(model_to_load_path=None):
 
 def initialize_app_data_and_models():
     """Initializes dataset directories, loads saved data, and loads the appropriate model."""
-    global class_name_to_id, next_class_id, image_count
+    global class_name_to_id, next_class_id, image_count, finished_class_ids
 
     os.makedirs(IMAGES_TRAIN_DIR, exist_ok=True)
     os.makedirs(LABELS_TRAIN_DIR, exist_ok=True)
@@ -161,11 +163,13 @@ def initialize_app_data_and_models():
                 class_name_to_id = data.get('class_name_to_id', {})
                 next_class_id = data.get('next_class_id', 0)
                 image_count = data.get('image_count', 0)
+                finished_class_ids = set(data.get('finished_class_ids', []))  # Load finished class IDs
         except json.JSONDecodeError:
             print(f"Warning: {CLASS_MAPPING_FILE} is corrupted or empty. Starting with empty mapping.")
             class_name_to_id = {}
             next_class_id = 0
             image_count = 0
+            finished_class_ids = set()
     
     update_data_yaml()
     load_detection_model()
@@ -651,12 +655,19 @@ def capture_data():
     Receives an image and initial detections, assigns a class ID based on provided name,
     saves the image, and creates a YOLOv5-formatted label file.
     Distributes images into train/val folders.
+    
+    If query parameter ?finished=true is present, marks the class ID as finished
+    and prevents further image saving for that class ID.
     """
     global image_count
     global next_class_id
     global class_name_to_id
+    global finished_class_ids
 
     try:
+        # Check if finished=true query parameter is present
+        finished_param = request.args.get('finished', '').lower() == 'true'
+        
         data = request.get_json()
         img_b64 = data['image']
         detections = data['detections']
@@ -672,8 +683,18 @@ def capture_data():
             save_class_mapping()
             print(f"Registered new face: '{person_name}' with ID {class_name_to_id[person_name]}")
 
-
         person_class_id = class_name_to_id[person_name]
+        
+        # If finished=true, mark this class ID as finished and return
+        if finished_param:
+            finished_class_ids.add(person_class_id)
+            save_class_mapping()
+            print(f"Marked class ID {person_class_id} ({person_name}) as finished. No more images will be saved for this class.")
+            return jsonify({"success": True, "message": f"Class ID {person_class_id} ({person_name}) marked as finished."})
+        
+        # Check if this class ID is already finished
+        if person_class_id in finished_class_ids:
+            return jsonify({"success": False, "error": f"Class ID {person_class_id} ({person_name}) is already marked as finished. No more images can be saved for this class."}), 400
 
         img_bytes = base64.b64decode(img_b64)
         img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
