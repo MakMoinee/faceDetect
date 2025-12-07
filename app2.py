@@ -801,13 +801,56 @@ def delete_data():
         
         # Find the class name associated with this ID
         class_name_to_delete = None
+        
+        # First, try to find in class_name_to_id
         for name, cid in class_name_to_id.items():
             if cid == class_id_to_delete:
                 class_name_to_delete = name
                 break
         
+        # If not found in class_name_to_id, try to find in data.yaml
         if class_name_to_delete is None:
-            return jsonify({"success": False, "error": f"Class ID {class_id_to_delete} not found."}), 404
+            try:
+                if os.path.exists(DATA_YAML_PATH):
+                    with open(DATA_YAML_PATH, 'r') as f:
+                        yaml_data = yaml.safe_load(f)
+                        names_dict = yaml_data.get('names', {})
+                        # names_dict is {id: name} format
+                        if isinstance(names_dict, dict):
+                            class_name_to_delete = names_dict.get(class_id_to_delete)
+                            # Also check if ID is stored as string
+                            if class_name_to_delete is None:
+                                class_name_to_delete = names_dict.get(str(class_id_to_delete))
+            except Exception as e:
+                print(f"Error reading data.yaml: {e}")
+        
+        # If still not found, verify ID exists in data.yaml before proceeding
+        if class_name_to_delete is None:
+            # Double-check data.yaml one more time with better error handling
+            id_found_in_yaml = False
+            try:
+                if os.path.exists(DATA_YAML_PATH):
+                    with open(DATA_YAML_PATH, 'r') as f:
+                        yaml_data = yaml.safe_load(f)
+                        names_dict = yaml_data.get('names', {})
+                        if isinstance(names_dict, dict):
+                            # Check both int and string versions of the ID
+                            id_found_in_yaml = (class_id_to_delete in names_dict) or (str(class_id_to_delete) in names_dict)
+                            if id_found_in_yaml:
+                                class_name_to_delete = names_dict.get(class_id_to_delete) or names_dict.get(str(class_id_to_delete))
+            except Exception as e:
+                print(f"Error reading data.yaml: {e}")
+            
+            if not id_found_in_yaml:
+                return jsonify({
+                    "success": False, 
+                    "error": f"Class ID {class_id_to_delete} not found in class_name_to_id or data.yaml. Available IDs in class_name_to_id: {list(class_name_to_id.values())}"
+                }), 404
+            
+            # Use placeholder if we found ID in yaml but couldn't get the name
+            if class_name_to_delete is None:
+                class_name_to_delete = f"Unknown_{class_id_to_delete}"
+                print(f"Warning: Class ID {class_id_to_delete} found in data.yaml but name not found. Proceeding with deletion by ID only.")
         
         # Scan and delete associated images and labels
         deleted_images = []
@@ -856,15 +899,18 @@ def delete_data():
                     print(f"Error processing label file {label_filename}: {e}")
                     continue
         
-        # Remove from class_name_to_id
-        del class_name_to_id[class_name_to_delete]
+        # Remove from class_name_to_id (only if it exists there)
+        if class_name_to_delete in class_name_to_id:
+            del class_name_to_id[class_name_to_delete]
         
         # Remove from finished_class_ids if present
         finished_class_ids.discard(class_id_to_delete)
         
         # Add to deleted sets for potential reuse
         deleted_class_ids.add(class_id_to_delete)
-        deleted_name_to_id[class_name_to_delete] = class_id_to_delete  # Remember which name had this ID
+        # Only remember name->ID mapping if we found a real name (not placeholder)
+        if not class_name_to_delete.startswith("Unknown_"):
+            deleted_name_to_id[class_name_to_delete] = class_id_to_delete  # Remember which name had this ID
         
         # Update data.yaml
         update_data_yaml()
