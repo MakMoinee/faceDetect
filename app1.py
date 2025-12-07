@@ -814,36 +814,73 @@ def delete_data():
                     with open(DATA_YAML_PATH, 'r') as f:
                         yaml_data = yaml.safe_load(f)
                         names_dict = yaml_data.get('names', {})
-                        # names_dict is {id: name} format
+                        # names_dict is {index: name} format, where name might be the actual ID
                         if isinstance(names_dict, dict):
+                            # First check if the ID is a key (index)
                             class_name_to_delete = names_dict.get(class_id_to_delete)
-                            # Also check if ID is stored as string
+                            # Also check if ID is stored as string key
                             if class_name_to_delete is None:
                                 class_name_to_delete = names_dict.get(str(class_id_to_delete))
+                            
+                            # If still not found, loop through values to see if ID is stored as a name
+                            if class_name_to_delete is None:
+                                for index, name in names_dict.items():
+                                    # Check if the name matches the ID (as string or int)
+                                    if str(name) == str(class_id_to_delete) or name == class_id_to_delete:
+                                        class_name_to_delete = name
+                                        # Also update class_name_to_id mapping for consistency
+                                        class_name_to_id[name] = int(index) if isinstance(index, (int, str)) and str(index).isdigit() else index
+                                        print(f"Found class ID {class_id_to_delete} in data.yaml as name '{name}' at index {index}")
+                                        break
             except Exception as e:
                 print(f"Error reading data.yaml: {e}")
         
         # If still not found, verify ID exists in data.yaml before proceeding
         if class_name_to_delete is None:
-            # Double-check data.yaml one more time with better error handling
+            # Double-check data.yaml by looping through all values
             id_found_in_yaml = False
+            yaml_indices = []
+            yaml_names = []
             try:
                 if os.path.exists(DATA_YAML_PATH):
                     with open(DATA_YAML_PATH, 'r') as f:
                         yaml_data = yaml.safe_load(f)
                         names_dict = yaml_data.get('names', {})
                         if isinstance(names_dict, dict):
-                            # Check both int and string versions of the ID
-                            id_found_in_yaml = (class_id_to_delete in names_dict) or (str(class_id_to_delete) in names_dict)
-                            if id_found_in_yaml:
-                                class_name_to_delete = names_dict.get(class_id_to_delete) or names_dict.get(str(class_id_to_delete))
+                            # Get all indices and names for debugging
+                            yaml_indices = list(names_dict.keys())
+                            yaml_names = list(names_dict.values())
+                            
+                            # Loop through all entries to find the ID
+                            for index, name in names_dict.items():
+                                # Check if the name (value) matches the ID we're looking for
+                                if str(name) == str(class_id_to_delete) or name == class_id_to_delete:
+                                    id_found_in_yaml = True
+                                    class_name_to_delete = name
+                                    # Update class_name_to_id for consistency
+                                    index_int = int(index) if isinstance(index, (int, str)) and str(index).isdigit() else index
+                                    class_name_to_id[name] = index_int
+                                    print(f"Found class ID {class_id_to_delete} in data.yaml as name '{name}' at index {index}")
+                                    break
+                                # Also check if the index matches
+                                try:
+                                    index_int = int(index) if isinstance(index, str) else index
+                                    if index_int == class_id_to_delete:
+                                        id_found_in_yaml = True
+                                        class_name_to_delete = name
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
             except Exception as e:
                 print(f"Error reading data.yaml: {e}")
             
             if not id_found_in_yaml:
                 return jsonify({
                     "success": False, 
-                    "error": f"Class ID {class_id_to_delete} not found in class_name_to_id or data.yaml. Available IDs in class_name_to_id: {list(class_name_to_id.values())}"
+                    "error": f"Class ID {class_id_to_delete} not found in class_name_to_id or data.yaml.",
+                    "available_ids_in_class_mapping": list(class_name_to_id.values()),
+                    "yaml_indices": yaml_indices[:50] if len(yaml_indices) <= 50 else yaml_indices[:50] + [f"... and {len(yaml_indices) - 50} more"],
+                    "yaml_names": yaml_names[:50] if len(yaml_names) <= 50 else yaml_names[:50] + [f"... and {len(yaml_names) - 50} more"]
                 }), 404
             
             # Use placeholder if we found ID in yaml but couldn't get the name
